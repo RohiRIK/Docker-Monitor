@@ -3,15 +3,12 @@
 // Requires: Docker Swarm manager node, Bun runtime, slack-webhook-docker-alerts credential.
 // NOTE: Must run on a Swarm manager node — worker nodes cannot run 'docker node ls'.
 pipeline {
-    agent {
-        label 'PLACEHOLDER_SWARM_MANAGER_AGENT'
-    }
+    agent any
 
     options {
         timeout(time: 10, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '30'))
-        timestamps()
     }
 
     triggers {
@@ -42,11 +39,9 @@ pipeline {
     }
 
     environment {
-        SLACK_WEBHOOK_URL            = credentials('slack-webhook-docker-alerts')
         TASK_FAILURE_WINDOW_MINUTES  = "${params.TASK_FAILURE_WINDOW_MINUTES}"
         TASK_FAILURE_THRESHOLD       = "${params.TASK_FAILURE_THRESHOLD}"
         DRY_RUN                      = "${params.DRY_RUN}"
-        BUILD_NUMBER                 = "${env.BUILD_NUMBER}"
     }
 
     stages {
@@ -55,7 +50,8 @@ pipeline {
                 script {
                     sh '''
                         set -e
-                        bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
+                        echo "=== Runtime check ==="
+                        /usr/local/bin/bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
                         docker --version || { echo "ERROR: docker not found on PATH"; exit 1; }
                         docker info > /dev/null 2>&1 || { echo "ERROR: Docker daemon is not reachable"; exit 1; }
 
@@ -80,7 +76,7 @@ pipeline {
 
         stage('Install') {
             steps {
-                sh 'bun install --frozen-lockfile'
+                sh '/usr/local/bin/bun install --frozen-lockfile'
             }
         }
 
@@ -88,11 +84,10 @@ pipeline {
             steps {
                 script {
                     def exitCode = sh(
-                        script: 'bun run swarm-health',
+                        script: '/usr/local/bin/bun run swarm-health',
                         returnStatus: true
                     )
                     if (exitCode == 1) {
-                        // exit 1 = Swarm not active or env error — hard failure
                         currentBuild.description = "Swarm not active or env error"
                         error("swarm-health exited 1 — Swarm unavailable or misconfigured")
                     } else if (exitCode == 2) {
@@ -127,12 +122,17 @@ pipeline {
             }
             steps {
                 script {
-                    def msg = "⚠️ Docker Swarm Health — issues detected on build #${env.BUILD_NUMBER}. Check archived report."
-                    sh """
-                        curl -s -X POST -H 'Content-Type: application/json' \
-                            -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
-                            "\$SLACK_WEBHOOK_URL" || true
-                    """
+                    withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
+                        if (env.SLACK_WEBHOOK_URL) {
+                            def currentDate = new Date().format("yyyy-MM-dd HH:mm")
+                            def msg = "⚠️ Docker Swarm Health — issues detected on build #${env.BUILD_NUMBER}\n📅 ${currentDate}"
+                            sh """
+                                curl -s -X POST -H 'Content-Type: application/json' \
+                                    -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"Check archived report."}]}' \
+                                    "${env.SLACK_WEBHOOK_URL}" || true
+                            """
+                        }
+                    }
                 }
             }
         }
@@ -141,18 +141,21 @@ pipeline {
     post {
         failure {
             script {
-                if (!params.DRY_RUN) {
-                    def msg = "🔴 Docker Swarm Health FAILED on build #${env.BUILD_NUMBER}."
-                    sh """
-                        curl -s -X POST -H 'Content-Type: application/json' \
-                            -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
-                            "\$SLACK_WEBHOOK_URL" || true
-                    """
+                withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
+                    if (!params.DRY_RUN && env.SLACK_WEBHOOK_URL) {
+                        def currentDate = new Date().format("yyyy-MM-dd HH:mm")
+                        def msg = "🔴 Docker Swarm Health FAILED on build #${env.BUILD_NUMBER}\n📅 ${currentDate}"
+                        sh """
+                            curl -s -X POST -H 'Content-Type: application/json' \
+                                -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
+                                "${env.SLACK_WEBHOOK_URL}" || true
+                        """
+                    }
                 }
             }
         }
         always {
-            cleanWs()
+            echo "Build completed"
         }
     }
 }

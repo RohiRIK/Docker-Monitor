@@ -2,15 +2,12 @@
 // Measures per-container CPU and memory usage against configurable thresholds.
 // Requires: Docker CLI on agent PATH, Bun runtime, slack-webhook-docker-alerts credential.
 pipeline {
-    agent {
-        label 'PLACEHOLDER_LINUX_AGENT'
-    }
+    agent any
 
     options {
         timeout(time: 10, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '30'))
-        timestamps()
     }
 
     triggers {
@@ -46,12 +43,10 @@ pipeline {
     }
 
     environment {
-        SLACK_WEBHOOK_URL = credentials('slack-webhook-docker-alerts')
         CPU_THRESHOLD_PCT = "${params.CPU_THRESHOLD_PCT}"
         MEM_THRESHOLD_PCT = "${params.MEM_THRESHOLD_PCT}"
         CONTAINER_FILTER  = "${params.CONTAINER_FILTER}"
         DRY_RUN           = "${params.DRY_RUN}"
-        BUILD_NUMBER      = "${env.BUILD_NUMBER}"
     }
 
     stages {
@@ -60,7 +55,8 @@ pipeline {
                 script {
                     sh '''
                         set -e
-                        bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
+                        echo "=== Runtime check ==="
+                        /usr/local/bin/bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
                         docker --version || { echo "ERROR: docker not found on PATH"; exit 1; }
                         docker info > /dev/null 2>&1 || { echo "ERROR: Docker daemon is not reachable"; exit 1; }
 
@@ -80,7 +76,7 @@ pipeline {
 
         stage('Install') {
             steps {
-                sh 'bun install --frozen-lockfile'
+                sh '/usr/local/bin/bun install --frozen-lockfile'
             }
         }
 
@@ -88,7 +84,7 @@ pipeline {
             steps {
                 script {
                     def exitCode = sh(
-                        script: 'bun run resource-report',
+                        script: '/usr/local/bin/bun run resource-report',
                         returnStatus: true
                     )
                     if (exitCode == 2) {
@@ -123,12 +119,17 @@ pipeline {
             }
             steps {
                 script {
-                    def msg = "⚠️ Docker Resource Report — threshold breach(es) on build #${env.BUILD_NUMBER}."
-                    sh """
-                        curl -s -X POST -H 'Content-Type: application/json' \
-                            -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
-                            "\$SLACK_WEBHOOK_URL" || true
-                    """
+                    withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
+                        if (env.SLACK_WEBHOOK_URL) {
+                            def currentDate = new Date().format("yyyy-MM-dd HH:mm")
+                            def msg = "⚠️ Docker Resource Report — threshold breach(es) on build #${env.BUILD_NUMBER}\n📅 ${currentDate}"
+                            sh """
+                                curl -s -X POST -H 'Content-Type: application/json' \
+                                    -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"Check archived report for details."}]}' \
+                                    "${env.SLACK_WEBHOOK_URL}" || true
+                            """
+                        }
+                    }
                 }
             }
         }
@@ -137,18 +138,21 @@ pipeline {
     post {
         failure {
             script {
-                if (!params.DRY_RUN) {
-                    def msg = "🔴 Docker Resource Report FAILED on build #${env.BUILD_NUMBER}."
-                    sh """
-                        curl -s -X POST -H 'Content-Type: application/json' \
-                            -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
-                            "\$SLACK_WEBHOOK_URL" || true
-                    """
+                withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
+                    if (!params.DRY_RUN && env.SLACK_WEBHOOK_URL) {
+                        def currentDate = new Date().format("yyyy-MM-dd HH:mm")
+                        def msg = "🔴 Docker Resource Report FAILED on build #${env.BUILD_NUMBER}\n📅 ${currentDate}"
+                        sh """
+                            curl -s -X POST -H 'Content-Type: application/json' \
+                                -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
+                                "${env.SLACK_WEBHOOK_URL}" || true
+                        """
+                    }
                 }
             }
         }
         always {
-            cleanWs()
+            echo "Build completed"
         }
     }
 }

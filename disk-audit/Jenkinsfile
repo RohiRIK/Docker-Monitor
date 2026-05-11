@@ -3,15 +3,12 @@
 // AUDIT ONLY — this pipeline never executes docker prune, docker rm, or docker rmi.
 // Requires: Docker CLI on agent PATH, Bun runtime, slack-webhook-docker-alerts credential.
 pipeline {
-    agent {
-        label 'PLACEHOLDER_LINUX_AGENT'
-    }
+    agent any
 
     options {
         timeout(time: 15, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '30'))
-        timestamps()
     }
 
     triggers {
@@ -47,12 +44,10 @@ pipeline {
     }
 
     environment {
-        SLACK_WEBHOOK_URL        = credentials('slack-webhook-docker-alerts')
         DANGLING_IMAGE_AGE_DAYS  = "${params.DANGLING_IMAGE_AGE_DAYS}"
         VOLUME_SIZE_MB_THRESHOLD = "${params.VOLUME_SIZE_MB_THRESHOLD}"
         REPORT_TOP_N             = "${params.REPORT_TOP_N}"
-        DRY_RUN                  = 'true'  // forced — this pipeline never prunes
-        BUILD_NUMBER             = "${env.BUILD_NUMBER}"
+        DRY_RUN                  = 'true'
     }
 
     stages {
@@ -61,7 +56,8 @@ pipeline {
                 script {
                     sh '''
                         set -e
-                        bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
+                        echo "=== Runtime check ==="
+                        /usr/local/bin/bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
                         docker --version || { echo "ERROR: docker not found on PATH"; exit 1; }
                         docker info > /dev/null 2>&1 || { echo "ERROR: Docker daemon is not reachable"; exit 1; }
                         echo "Environment OK"
@@ -72,15 +68,14 @@ pipeline {
 
         stage('Install') {
             steps {
-                sh 'bun install --frozen-lockfile'
+                sh '/usr/local/bin/bun install --frozen-lockfile'
             }
         }
 
         stage('Audit Disk Usage') {
             steps {
                 script {
-                    // disk-audit always exits 0 — it is informational only
-                    sh 'bun run disk-audit'
+                    sh '/usr/local/bin/bun run disk-audit'
                     currentBuild.description = "Audit complete — build #${env.BUILD_NUMBER}"
                 }
             }
@@ -97,15 +92,19 @@ pipeline {
         }
 
         stage('Notify') {
-            // Disk audit always sends a Slack summary (not gated by DRY_RUN — it's informational)
             steps {
                 script {
-                    def msg = "📦 Docker Disk Audit complete — build #${env.BUILD_NUMBER}. Check archived report for reclaimable candidates."
-                    sh """
-                        curl -s -X POST -H 'Content-Type: application/json' \
-                            -d '{"text":"${msg}","attachments":[{"color":"#36A64F","text":"${msg}"}]}' \
-                            "\$SLACK_WEBHOOK_URL" || true
-                    """
+                    withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
+                        if (env.SLACK_WEBHOOK_URL) {
+                            def currentDate = new Date().format("yyyy-MM-dd HH:mm")
+                            def msg = "📦 Docker Disk Audit complete — build #${env.BUILD_NUMBER}\n📅 ${currentDate}"
+                            sh """
+                                curl -s -X POST -H 'Content-Type: application/json' \
+                                    -d '{"text":"${msg}","attachments":[{"color":"#36A64F","text":"Check archived report for reclaimable candidates."}]}' \
+                                    "${env.SLACK_WEBHOOK_URL}" || true
+                            """
+                        }
+                    }
                 }
             }
         }
@@ -114,16 +113,21 @@ pipeline {
     post {
         failure {
             script {
-                def msg = "🔴 Docker Disk Audit FAILED on build #${env.BUILD_NUMBER}."
-                sh """
-                    curl -s -X POST -H 'Content-Type: application/json' \
-                        -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
-                        "\$SLACK_WEBHOOK_URL" || true
-                """
+                withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
+                    if (env.SLACK_WEBHOOK_URL) {
+                        def currentDate = new Date().format("yyyy-MM-dd HH:mm")
+                        def msg = "🔴 Docker Disk Audit FAILED on build #${env.BUILD_NUMBER}\n📅 ${currentDate}"
+                        sh """
+                            curl -s -X POST -H 'Content-Type: application/json' \
+                                -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
+                                "${env.SLACK_WEBHOOK_URL}" || true
+                        """
+                    }
+                }
             }
         }
         always {
-            cleanWs()
+            echo "Build completed"
         }
     }
 }
