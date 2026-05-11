@@ -40,7 +40,7 @@ pipeline {
     }
 
     environment {
-        SLACK_WEBHOOK_URL     = credentials('slack-webhook-docker-alerts') ?: ''
+        SLACK_WEBHOOK_URL     = credentials('slack-webhook-docker-alerts')
         RESTART_THRESHOLD     = "${params.RESTART_THRESHOLD}"
         INCLUDE_STOPPED       = "${params.INCLUDE_STOPPED}"
         IS_DRY_RUN            = "${params.DRY_RUN}"
@@ -107,12 +107,14 @@ pipeline {
             }
             steps {
                 script {
-                    def msg = "⚠️ Docker Health Sweep — issues detected on build #${env.BUILD_NUMBER}. Check archived report."
-                    sh """
-                        curl -s -X POST -H 'Content-Type: application/json' \
-                            -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
-                            "\$SLACK_WEBHOOK_URL" || true
-                    """
+                    if (env.SLACK_WEBHOOK_URL) {
+                        def msg = "⚠️ Docker Health Sweep — issues detected on build #${env.BUILD_NUMBER}. Check archived report."
+                        sh """
+                            curl -s -X POST -H 'Content-Type: application/json' \
+                                -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
+                                "${env.SLACK_WEBHOOK_URL}" || true
+                        """
+                    }
                 }
             }
         }
@@ -121,12 +123,12 @@ pipeline {
     post {
         failure {
             script {
-                if (!params.DRY_RUN) {
+                if (!params.DRY_RUN && env.SLACK_WEBHOOK_URL) {
                     def msg = "🔴 Docker Health Sweep FAILED on build #${env.BUILD_NUMBER}."
                     sh """
                         curl -s -X POST -H 'Content-Type: application/json' \
                             -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
-                            "\$SLACK_WEBHOOK_URL" || true
+                            "${env.SLACK_WEBHOOK_URL}" || true
                     """
                 }
             }
