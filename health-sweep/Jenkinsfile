@@ -52,7 +52,7 @@ pipeline {
                     sh '''
                         set -e
                         echo "=== Runtime check ==="
-                        /root/.bun/bin/bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
+                        bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
                         docker --version || { echo "ERROR: docker not found on PATH"; exit 1; }
                         docker info > /dev/null 2>&1 || { echo "ERROR: Docker daemon is not reachable"; exit 1; }
                         echo "Environment OK"
@@ -63,7 +63,7 @@ pipeline {
 
         stage('Install') {
             steps {
-                sh '/root/.bun/bin/bun install --frozen-lockfile'
+                sh 'bun install --frozen-lockfile'
             }
         }
 
@@ -71,7 +71,7 @@ pipeline {
             steps {
                 script {
                     def exitCode = sh(
-                        script: '/root/.bun/bin/bun run health-sweep',
+                        script: 'bun run health-sweep',
                         returnStatus: true
                     )
                     if (exitCode == 2) {
