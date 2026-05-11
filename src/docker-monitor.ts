@@ -190,8 +190,7 @@ export function log(
 // ── Container queries ─────────────────────────────────────────────────────────
 
 export async function getContainerList(): Promise<Container[]> {
-  // Get all IDs first (fast, no parsing)
-  const idsResult = await runDocker(["ps", "-aq"])
+  const idsResult = await runDocker(["ps", "-q"])
   if (idsResult.exitCode !== 0) {
     throw new Error(`docker ps failed: ${idsResult.stderr}`)
   }
