@@ -123,7 +123,7 @@ def exitCode = sh(
                             def msg = "⚠️ Docker Health Sweep — issues detected on build #${env.BUILD_NUMBER}\n\n${issuesDetails}"
                             sh """
                                 curl -s -X POST -H 'Content-Type: application/json' \
-                                    -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
+                                    -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${issuesDetails}"}]}' \
                                     "${env.SLACK_WEBHOOK_URL}" || true
                             """
                         }
