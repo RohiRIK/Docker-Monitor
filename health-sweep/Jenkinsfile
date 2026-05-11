@@ -106,18 +106,15 @@ pipeline {
             }
             steps {
                 script {
-                    try {
-                        def slackUrl = credentials('slack-webhook-docker-alerts')
-                        if (slackUrl) {
+                    withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
+                        if (env.SLACK_WEBHOOK_URL) {
                             def msg = "⚠️ Docker Health Sweep — issues detected on build #${env.BUILD_NUMBER}. Check archived report."
                             sh """
                                 curl -s -X POST -H 'Content-Type: application/json' \
                                     -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
-                                    "${slackUrl}" || true
+                                    "${env.SLACK_WEBHOOK_URL}" || true
                             """
                         }
-                    } catch (Exception e) {
-                        echo "Slack not configured, skipping notification"
                     }
                 }
             }
@@ -127,20 +124,15 @@ pipeline {
     post {
         failure {
             script {
-                try {
-                    if (!params.DRY_RUN) {
-                        def slackUrl = credentials('slack-webhook-docker-alerts')
-                        if (slackUrl) {
-                            def msg = "🔴 Docker Health Sweep FAILED on build #${env.BUILD_NUMBER}."
-                            sh """
-                                curl -s -X POST -H 'Content-Type: application/json' \
-                                    -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
-                                    "${slackUrl}" || true
-                            """
-                        }
+                withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
+                    if (!params.DRY_RUN && env.SLACK_WEBHOOK_URL) {
+                        def msg = "🔴 Docker Health Sweep FAILED on build #${env.BUILD_NUMBER}."
+                        sh """
+                            curl -s -X POST -H 'Content-Type: application/json' \
+                                -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
+                                "${env.SLACK_WEBHOOK_URL}" || true
+                        """
                     }
-                } catch (Exception e) {
-                    echo "Slack not configured, skipping notification"
                 }
             }
         }
