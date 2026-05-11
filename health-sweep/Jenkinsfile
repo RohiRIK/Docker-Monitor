@@ -71,30 +71,18 @@ stage('Sweep Containers') {
             steps {
                 script {
                     def exitCode = sh(
-                        script: '/root/.bun/bin/bun run health-sweep',
+                        script: 'bun run health-sweep',
                         returnStatus: true
                     )
-                    // Read issues from report for Slack notification
-                    def issuesText = ""
-                    if (fileExists('health-report.json')) {
-                        def reportContent = readFile('health-report.json')
-                        def report = readJSON(text: reportContent)
-                        if (report.issues && report.issues.size() > 0) {
-                            issuesText = report.issues.collect { "• ${it.name}: ${it.classification}" }.join("\n")
-                        }
-                    }
                     
                     if (exitCode == 2) {
                         currentBuild.result      = 'UNSTABLE'
                         currentBuild.description = "Issues found — ${env.BUILD_NUMBER}"
-                        // Store issues for Notify stage
-                        env.ISSUES_TEXT = issuesText
                     } else if (exitCode != 0) {
                         currentBuild.description = "Sweep crashed (exit ${exitCode})"
                         error("health-sweep exited with code ${exitCode}")
                     } else {
                         currentBuild.description = "All containers healthy"
-                        env.ISSUES_TEXT = ""
                     }
                 }
             }
