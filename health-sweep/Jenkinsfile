@@ -70,20 +70,67 @@ pipeline {
 stage('Sweep Containers') {
             steps {
                 script {
-                    def exitCode = sh(
+def exitCode = sh(
                         script: 'bun run health-sweep',
                         returnStatus: true
                     )
                     
+                    // Get issue count for Slack
+                    def issueCount = sh(
+                        script: 'cat health-report.json | jq -r \'.issues | length\' 2>/dev/null || echo "0"',
+                        returnStdout: true
+                    ).trim()
+                    
                     if (exitCode == 2) {
                         currentBuild.result      = 'UNSTABLE'
-                        currentBuild.description = "Issues found — ${env.BUILD_NUMBER}"
+                        currentBuild.description = "Issues found — ${env.BUILD_NUMBER} (${issueCount} issues)"
                     } else if (exitCode != 0) {
                         currentBuild.description = "Sweep crashed (exit ${exitCode})"
                         error("health-sweep exited with code ${exitCode}")
                     } else {
                         currentBuild.description = "All containers healthy"
                     }
+                }
+            }
+        }
+
+        stage('Archive Report') {
+            steps {
+                archiveArtifacts(
+                    artifacts: 'health-report.json',
+                    allowEmptyArchive: true,
+                    fingerprint: false
+                )
+            }
+        }
+
+        stage('Notify') {
+            when {
+                allOf {
+                    expression { params.DRY_RUN == false }
+                    expression { currentBuild.result == 'UNSTABLE' }
+                }
+            }
+            steps {
+                script {
+                    withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
+                        if (env.SLACK_WEBHOOK_URL) {
+                            // Get issue details using jq
+                            def issuesDetails = sh(
+                                script: 'cat health-report.json | jq -r \'.issues[] | "• \\(.name): \\(.classification)"\' 2>/dev/null || echo "Check archived report"',
+                                returnStdout: true
+                            ).trim()
+                            def msg = "⚠️ Docker Health Sweep — issues detected on build #${env.BUILD_NUMBER}\n\n${issuesDetails}"
+                            sh """
+                                curl -s -X POST -H 'Content-Type: application/json' \
+                                    -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
+                                    "${env.SLACK_WEBHOOK_URL}" || true
+                            """
+                        }
+                    }
+                }
+            }
+        }
                 }
             }
         }
