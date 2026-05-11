@@ -1,0 +1,158 @@
+// Pipeline 4: Swarm Health Monitor
+// Monitors Docker Swarm node availability, service replica counts, and task failure rate.
+// Requires: Docker Swarm manager node, Bun runtime, slack-webhook-docker-alerts credential.
+// NOTE: Must run on a Swarm manager node — worker nodes cannot run 'docker node ls'.
+pipeline {
+    agent {
+        label 'PLACEHOLDER_SWARM_MANAGER_AGENT'
+    }
+
+    options {
+        timeout(time: 10, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        timestamps()
+    }
+
+    triggers {
+        cron(params.CRON_SCHEDULE ?: '')
+    }
+
+    parameters {
+        string(
+            name: 'CRON_SCHEDULE',
+            defaultValue: 'H/10 * * * *',
+            description: 'Cron expression (e.g. "H/10 * * * *"). Set to empty string to pause scheduling.'
+        )
+        string(
+            name: 'TASK_FAILURE_WINDOW_MINUTES',
+            defaultValue: '30',
+            description: 'Look back this many minutes for failed Swarm tasks.'
+        )
+        string(
+            name: 'TASK_FAILURE_THRESHOLD',
+            defaultValue: '3',
+            description: 'Alert if the number of failed tasks in the window >= this value.'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: true,
+            description: 'When checked, logs findings but does not send Slack alerts.'
+        )
+    }
+
+    environment {
+        SLACK_WEBHOOK_URL            = credentials('slack-webhook-docker-alerts')
+        TASK_FAILURE_WINDOW_MINUTES  = "${params.TASK_FAILURE_WINDOW_MINUTES}"
+        TASK_FAILURE_THRESHOLD       = "${params.TASK_FAILURE_THRESHOLD}"
+        DRY_RUN                      = "${params.DRY_RUN}"
+        BUILD_NUMBER                 = "${env.BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Validate Environment') {
+            steps {
+                script {
+                    sh '''
+                        set -e
+                        bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
+                        docker --version || { echo "ERROR: docker not found on PATH"; exit 1; }
+                        docker info > /dev/null 2>&1 || { echo "ERROR: Docker daemon is not reachable"; exit 1; }
+
+                        # Confirm this is a Swarm manager — worker nodes cannot run node ls
+                        SWARM_STATE=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo "inactive")
+                        if [ "$SWARM_STATE" != "active" ]; then
+                            echo "ERROR: Docker Swarm is not active on this node (state: $SWARM_STATE)"
+                            exit 1
+                        fi
+
+                        IS_MANAGER=$(docker info --format '{{.Swarm.ControlAvailable}}' 2>/dev/null || echo "false")
+                        if [ "$IS_MANAGER" != "true" ]; then
+                            echo "ERROR: This node is a Swarm worker, not a manager. Run on a manager node."
+                            exit 1
+                        fi
+
+                        echo "Swarm manager confirmed. Environment OK."
+                    '''
+                }
+            }
+        }
+
+        stage('Install') {
+            steps {
+                sh 'bun install --frozen-lockfile'
+            }
+        }
+
+        stage('Check Swarm Health') {
+            steps {
+                script {
+                    def exitCode = sh(
+                        script: 'bun run swarm-health',
+                        returnStatus: true
+                    )
+                    if (exitCode == 1) {
+                        // exit 1 = Swarm not active or env error — hard failure
+                        currentBuild.description = "Swarm not active or env error"
+                        error("swarm-health exited 1 — Swarm unavailable or misconfigured")
+                    } else if (exitCode == 2) {
+                        currentBuild.result      = 'UNSTABLE'
+                        currentBuild.description = "Swarm issues detected — build #${env.BUILD_NUMBER}"
+                    } else if (exitCode != 0) {
+                        currentBuild.description = "Crashed (exit ${exitCode})"
+                        error("swarm-health exited with code ${exitCode}")
+                    } else {
+                        currentBuild.description = "Swarm healthy"
+                    }
+                }
+            }
+        }
+
+        stage('Archive Report') {
+            steps {
+                archiveArtifacts(
+                    artifacts: "swarm-health-${env.BUILD_NUMBER}.json",
+                    allowEmptyArchive: true,
+                    fingerprint: false
+                )
+            }
+        }
+
+        stage('Notify') {
+            when {
+                allOf {
+                    expression { params.DRY_RUN == false }
+                    expression { currentBuild.result == 'UNSTABLE' }
+                }
+            }
+            steps {
+                script {
+                    def msg = "⚠️ Docker Swarm Health — issues detected on build #${env.BUILD_NUMBER}. Check archived report."
+                    sh """
+                        curl -s -X POST -H 'Content-Type: application/json' \
+                            -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
+                            "\$SLACK_WEBHOOK_URL" || true
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            script {
+                if (!params.DRY_RUN) {
+                    def msg = "🔴 Docker Swarm Health FAILED on build #${env.BUILD_NUMBER}."
+                    sh """
+                        curl -s -X POST -H 'Content-Type: application/json' \
+                            -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
+                            "\$SLACK_WEBHOOK_URL" || true
+                    """
+                }
+            }
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

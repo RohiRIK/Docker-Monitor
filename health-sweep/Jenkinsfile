@@ -1,0 +1,141 @@
+// Pipeline 1: Container Health Sweep
+// Checks all containers for unhealthy/restarting status and excessive restart counts.
+// Requires: Docker CLI on agent PATH, Bun runtime, slack-webhook-docker-alerts credential.
+pipeline {
+    agent {
+        label 'PLACEHOLDER_LINUX_AGENT'
+    }
+
+    options {
+        timeout(time: 10, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        timestamps()
+    }
+
+    // CRON_SCHEDULE drives the trigger — change param + save job to reschedule.
+    // Elvis operator guards against NPE on the very first build (params not yet populated).
+    triggers {
+        cron(params.CRON_SCHEDULE ?: '')
+    }
+
+    parameters {
+        string(
+            name: 'CRON_SCHEDULE',
+            defaultValue: 'H/15 * * * *',
+            description: 'Cron expression (e.g. "H/15 * * * *"). Set to empty string to pause scheduling.'
+        )
+        string(
+            name: 'RESTART_THRESHOLD',
+            defaultValue: '5',
+            description: 'Alert if a container RestartCount is >= this value.'
+        )
+        booleanParam(
+            name: 'INCLUDE_STOPPED',
+            defaultValue: true,
+            description: 'Include stopped (Exited) containers in the sweep.'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: true,
+            description: 'When checked, logs findings but does not send Slack alerts or write reports.'
+        )
+    }
+
+    environment {
+        SLACK_WEBHOOK_URL     = credentials('slack-webhook-docker-alerts')
+        RESTART_THRESHOLD     = "${params.RESTART_THRESHOLD}"
+        INCLUDE_STOPPED       = "${params.INCLUDE_STOPPED}"
+        IS_DRY_RUN            = "${params.DRY_RUN}"
+    }
+
+    stages {
+        stage('Validate Environment') {
+            steps {
+                script {
+                    sh '''
+                        set -e
+                        echo "=== Runtime check ==="
+                        bun --version || { echo "ERROR: bun not found on PATH"; exit 1; }
+                        docker --version || { echo "ERROR: docker not found on PATH"; exit 1; }
+                        docker info > /dev/null 2>&1 || { echo "ERROR: Docker daemon is not reachable"; exit 1; }
+                        echo "Environment OK"
+                    '''
+                }
+            }
+        }
+
+        stage('Install') {
+            steps {
+                sh 'bun install --frozen-lockfile'
+            }
+        }
+
+        stage('Sweep Containers') {
+            steps {
+                script {
+                    def exitCode = sh(
+                        script: 'bun run health-sweep',
+                        returnStatus: true
+                    )
+                    if (exitCode == 2) {
+                        currentBuild.result      = 'UNSTABLE'
+                        currentBuild.description = "Issues found — ${env.BUILD_NUMBER}"
+                    } else if (exitCode != 0) {
+                        currentBuild.description = "Sweep crashed (exit ${exitCode})"
+                        error("health-sweep exited with code ${exitCode}")
+                    } else {
+                        currentBuild.description = "All containers healthy"
+                    }
+                }
+            }
+        }
+
+        stage('Archive Report') {
+            steps {
+                archiveArtifacts(
+                    artifacts: 'health-report.json',
+                    allowEmptyArchive: true,
+                    fingerprint: false
+                )
+            }
+        }
+
+        stage('Notify') {
+            when {
+                allOf {
+                    expression { params.DRY_RUN == false }
+                    expression { currentBuild.result == 'UNSTABLE' }
+                }
+            }
+            steps {
+                script {
+                    def msg = "⚠️ Docker Health Sweep — issues detected on build #${env.BUILD_NUMBER}. Check archived report."
+                    sh """
+                        curl -s -X POST -H 'Content-Type: application/json' \
+                            -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
+                            "\$SLACK_WEBHOOK_URL" || true
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            script {
+                if (!params.DRY_RUN) {
+                    def msg = "🔴 Docker Health Sweep FAILED on build #${env.BUILD_NUMBER}."
+                    sh """
+                        curl -s -X POST -H 'Content-Type: application/json' \
+                            -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
+                            "\$SLACK_WEBHOOK_URL" || true
+                    """
+                }
+            }
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
