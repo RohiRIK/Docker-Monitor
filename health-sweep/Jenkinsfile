@@ -2,15 +2,12 @@
 // Checks all containers for unhealthy/restarting status and excessive restart counts.
 // Requires: Docker CLI on agent PATH, Bun runtime, slack-webhook-docker-alerts credential.
 pipeline {
-    agent {
-        label 'PLACEHOLDER_LINUX_AGENT'
-    }
+    agent any
 
     options {
         timeout(time: 10, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '30'))
-        timestamps()
     }
 
     // CRON_SCHEDULE drives the trigger — change param + save job to reschedule.
