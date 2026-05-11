@@ -34,7 +34,7 @@ pipeline {
         )
         booleanParam(
             name: 'DRY_RUN',
-            defaultValue: true,
+            defaultValue: false,
             description: 'When checked, logs findings but does not send Slack alerts or write reports.'
         )
     }
