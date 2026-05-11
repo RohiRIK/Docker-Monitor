@@ -1,12 +1,44 @@
+# Dependencies
 node_modules/
+
+# Environment
 .env
 .env.local
+.env.*.local
+
+# Database
 *.db
 *.db-shm
 *.db-wal
+
+# Build output
+dist/
+build/
+
+# Reports & Coverage
 reports/
 coverage/
-dist/
-.DS_Store
+
+# Logs
 *.log
+logs/
+
+# Temp
 tmp/
+temp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.pid
+
+#plan 
+specs/
