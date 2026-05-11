@@ -42,7 +42,7 @@ pipeline {
     environment {
         RESTART_THRESHOLD     = "${params.RESTART_THRESHOLD}"
         INCLUDE_STOPPED       = "${params.INCLUDE_STOPPED}"
-        IS_DRY_RUN            = "${params.DRY_RUN}"
+        DRY_RUN               = "${params.DRY_RUN}"
     }
 
     stages {
