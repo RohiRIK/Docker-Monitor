@@ -40,7 +40,7 @@ pipeline {
     }
 
     environment {
-        SLACK_WEBHOOK_URL     = credentials('slack-webhook-docker-alerts')
+        SLACK_WEBHOOK_URL     = credentials('slack-webhook-docker-alerts') ?: ''
         RESTART_THRESHOLD     = "${params.RESTART_THRESHOLD}"
         INCLUDE_STOPPED       = "${params.INCLUDE_STOPPED}"
         IS_DRY_RUN            = "${params.DRY_RUN}"
@@ -132,7 +132,12 @@ pipeline {
             }
         }
         always {
-            cleanWs()
+            script {
+                // Use deleteDir() instead of cleanWs() to avoid requiring Workspace Cleanup plugin
+                dir("${env.WORKSPACE}") {
+                    deleteDir()
+                }
+            }
         }
     }
 }
