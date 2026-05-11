@@ -131,42 +131,6 @@ def exitCode = sh(
                 }
             }
         }
-                }
-            }
-        }
-
-        stage('Archive Report') {
-            steps {
-                archiveArtifacts(
-                    artifacts: 'health-report.json',
-                    allowEmptyArchive: true,
-                    fingerprint: false
-                )
-            }
-        }
-
-        stage('Notify') {
-            when {
-                allOf {
-                    expression { params.DRY_RUN == false }
-                    expression { currentBuild.result == 'UNSTABLE' }
-                }
-            }
-            steps {
-                script {
-                    withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
-                        if (env.SLACK_WEBHOOK_URL) {
-                            def msg = "⚠️ Docker Health Sweep — issues detected on build #${env.BUILD_NUMBER}\n\n${env.ISSUES_TEXT}"
-                            sh """
-                                curl -s -X POST -H 'Content-Type: application/json' \
-                                    -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${msg}"}]}' \
-                                    "${env.SLACK_WEBHOOK_URL}" || true
-                            """
-                        }
-                    }
-                }
-            }
-        }
     }
 
     post {
