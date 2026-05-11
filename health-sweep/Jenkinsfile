@@ -120,7 +120,8 @@ def exitCode = sh(
                                 script: 'cat health-report.json | jq -r \'.issues[] | "• \\(.name): \\(.classification)"\' 2>/dev/null || echo "Check archived report"',
                                 returnStdout: true
                             ).trim()
-                            def msg = "⚠️ Docker Health Sweep — issues detected on build #${env.BUILD_NUMBER}\n\n${issuesDetails}"
+                            def currentDate = new Date().format("yyyy-MM-dd HH:mm")
+                            def msg = "⚠️ Docker Health Sweep — issues detected on build #${env.BUILD_NUMBER}\n📅 ${currentDate}\n\n${issuesDetails}"
                             sh """
                                 curl -s -X POST -H 'Content-Type: application/json' \
                                     -d '{"text":"${msg}","attachments":[{"color":"#FFA500","text":"${issuesDetails}"}]}' \
@@ -138,7 +139,8 @@ def exitCode = sh(
             script {
                 withCredentials([string(credentialsId: 'slack-webhook-docker-alerts', variable: 'SLACK_WEBHOOK_URL')]) {
                     if (!params.DRY_RUN && env.SLACK_WEBHOOK_URL) {
-                        def msg = "🔴 Docker Health Sweep FAILED on build #${env.BUILD_NUMBER}."
+                        def currentDate = new Date().format("yyyy-MM-dd HH:mm")
+                        def msg = "🔴 Docker Health Sweep FAILED on build #${env.BUILD_NUMBER}\n📅 ${currentDate}"
                         sh """
                             curl -s -X POST -H 'Content-Type: application/json' \
                                 -d '{"text":"${msg}","attachments":[{"color":"#FF0000","text":"${msg}"}]}' \
